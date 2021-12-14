@@ -28,7 +28,8 @@ server2 <- function(input, output) {
                                           newdata = data.frame(
                                               mean_income  = input$mean_income,
                                               below_poverty_perc  = input$below_poverty_perc,
-                                              store_count = input$store_count
+                                              store_count = input$store_count,
+                                              borough = input$borough
                                           ))
         
         df <- as.data.frame(ordinal_pred) %>%
@@ -57,8 +58,7 @@ server2 <- function(input, output) {
     
     # tab <- df %>% sort(decreasing=TRUE)
     # names(dimnames(tab)) <- c("Transit_Accessibility")
-    # tab
-})
+    # tab)}
 
 }
 
@@ -69,8 +69,12 @@ ui2 <- fluidPage(
         sidebarPanel(
             sliderInput("mean_income", "Mean Income per Year (in USD)", min = 0, max = 300000, value = 10),
             sliderInput("below_poverty_perc", "% Below Poverty", min = 0, max = 100, value = 1),
-            # sliderInput("eviction_count", "Number of Evictions", min = 0, max=1500, value =1),
-            sliderInput("store_count", "Store Count", min = 0, max = 250, value = 1)
+            sliderInput("store_count", "Store Count", min = 0, max = 250, value = 1), 
+            selectInput("borough", "Select NYC Borough:",
+                        as.factor(c("Brooklyn" ,
+                          "Queens"  ,
+                          "Manhattan",
+                          "Bronx")))
         ),
         mainPanel(
             h4("Model Predictions"), 

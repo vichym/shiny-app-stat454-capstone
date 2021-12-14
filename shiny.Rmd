@@ -15,6 +15,13 @@ library(dplyr)
 
 ordinal_model <- readRDS("shiny_app_ordinal_model.rds")
 # naive_model<- readRDS("shiny_app_naive_model.rds")
+ ordinal_pred <- posterior_predict(ordinal_model,
+                          newdata = data.frame(
+                            mean_income  = 10000,
+                            below_poverty_perc  =20,
+                            store_count = 30, 
+                            borough = as.factor(c('Manhattan'))
+                          ))
 
 # Build the server
 server2 <- function(input, output) {
@@ -24,8 +31,9 @@ server2 <- function(input, output) {
        ordinal_pred <- posterior_predict(ordinal_model,
                           newdata = data.frame(
                             mean_income  = input$mean_income,
-                             below_poverty_perc  = input$below_poverty_perc,
-                             store_count = input$store_count
+                            below_poverty_perc  =input$below_poverty_perc,
+                            store_count = input$store_count,
+                            borough = 'Manhattan'
                           ))
 
         df <- as.data.frame(ordinal_pred) %>%
@@ -55,7 +63,7 @@ server2 <- function(input, output) {
       # tab <- df %>% sort(decreasing=TRUE)
       # names(dimnames(tab)) <- c("Transit_Accessibility")
       # tab
-    })
+    # })
     
 }
 
