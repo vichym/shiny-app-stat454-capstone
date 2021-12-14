@@ -1,0 +1,219 @@
+---
+title: "Shinny Model"
+author: "Vichearith"
+date: "12/13/2021"
+output: html_document
+---
+
+## Train Model for Shiny Web App 
+
+### Odinal Model
+
+#### Load data
+```{r}
+library(rstanarm)
+library(rstan)
+library(readr)
+library(dplyr)
+library(broom.mixed)
+library(bayesrules)
+library(rsample)
+library(kableExtra)
+library(here)
+
+
+library(rsample)
+set.seed(454)
+nyc_clean <- read_csv(here("clean_data/nyc_names_vichy_complied2.csv"))
+
+nyc_clean <- nyc_clean %>%
+  mutate(transportation_desert_3cat = ordered(transportation_desert_3cat, levels=c("Poor", "Typical", "Excellent"))) %>%
+    mutate(transportation_desert_3cat_num = ordered(as.numeric(transportation_desert_3cat))) %>%
+   mutate(asian_perc = (asian_count / total_pop) * 100) %>%
+   mutate(white_perc = (white_count / total_pop)* 100) %>%
+   mutate(black_perc = (black_count / total_pop)* 100) %>%
+   mutate(latinx_perc = (latinx_count / total_pop)* 100) %>%
+   mutate(native_perc = (native_count / total_pop)* 100) %>%
+   mutate(below_poverty_perc = (below_poverty_line_count / total_pop) * 100) %>%
+   mutate(noncitizen_perc = (noncitizen_count / total_pop)* 100) %>%
+   mutate(uninsured_perc = (uninsured_count / total_pop)* 100) %>%
+  mutate(unemployment_perc = (unemployment_count / total_pop)* 100) %>%
+  filter(nta_type == 0)
+
+
+data_split <- initial_split(nyc_clean, prop = .8) 
+data_train <- training(data_split)
+data_test <- testing(data_split) 
+```
+#### Visualize data
+```{r}
+
+quantile(data_train$perc_covered_by_transit)
+
+
+data_train %>%
+  # dplyr::select(perc_covered_by_transit) %>% 
+  # mutate(quantile = cut(perc_covered_by_transit, breaks=c(-1,41.4,88.1,99.97,100), label=c('Q1','Q2','Q3','Q4'))) %>%
+  ggplot(aes(x= perc_covered_by_transit, fill= transportation_desert_3cat)) +
+  labs(x = 'Percentage Covered by Subway', 
+       y = 'Density', 
+       title= 'Density Distribution of Percentage Subway Coverage', 
+       fill='Quantile')+
+  expand_limits(x=100)+
+  geom_histogram(binwidth = 1)
+```
+#### Train Model
+```{r Ordinal Train}
+ordinal_model <- stan_polr(transportation_desert_3cat_num ~ 
+                             mean_income +
+                             below_poverty_perc +
+                             store_count, 
+                    data =data_train, prior_counts = dirichlet(1),
+                    prior=NULL, iter=500, seed = 86437, refresh=0, prior_PD=FALSE)
+```
+
+#### Save Naive Model
+
+```{r Ordinal Train}
+saveRDS(ordinal_model, "shiny_app_ordinal_model.rds")
+```
+#### Accuracy
+
+```{r Accuracy Function}
+tidy_ordinal_accuracy <- function(testing_data, predictions){
+  
+  # write mode function since it does not exist in R
+  mode <- function(x) {
+                t <- table(x)
+                names(t)[which.max(t)]
+  }
+  
+  #write mode function since it does not exist in R
+  mydata <- testing_data  %>%
+    dplyr::select(`transportation_desert_3cat_num`) %>% 
+    rownames_to_column("observation") 
+  
+  # extract predictions
+  # transpose so each row is a case from the training data, 
+  # then compute rowwise modes of classifications to find the most common prediction
+  raw_table <- predictions%>%
+    t() %>%
+    as.tibble()%>% 
+    mutate_if(is.character, as.numeric) %>%
+    rownames_to_column("observation") %>% 
+    rowwise(id="observation") %>%
+    mutate_if(is.numeric, as.factor) %>%
+    summarize(modal_prediction = mode(c_across(where(is.factor))))  %>%
+    right_join(mydata, ., by = "observation")
+
+  # compute transportation category accuracies
+  group_specific <- raw_table %>%
+    mutate(Accurate = ifelse(modal_prediction == transportation_desert_3cat_num, 1,0))%>%
+    group_by(transportation_desert_3cat_num) %>%
+    summarise(Accuracy = mean(Accurate)) %>%
+    mutate(transportation_desert_3cat_num = case_when(
+    transportation_desert_3cat_num==1 ~ "Poor",
+    transportation_desert_3cat_num == 2 ~ "Typical",
+    TRUE ~ "Excellent"))  
+ 
+   # compute overall accuracy
+  overall <- raw_table %>%
+    mutate(Accurate = ifelse(modal_prediction ==transportation_desert_3cat_num, 1,0))%>%
+    summarise(Accuracy = mean(Accurate)) %>%
+    mutate(transportation_desert_3cat_num = "Overall", .before=1)
+  
+  # bind into table
+  rbind(group_specific, overall) %>%
+    dplyr::rename("Access Level" = transportation_desert_3cat_num) %>%
+    kable(align = "c", caption = "Non-Citizen Model - Summary") %>% 
+    kable_styling()
+  
+}
+
+my_prediction2 <- posterior_predict(
+  ordinal_model, 
+  newdata = data_test)
+
+tidy_ordinal_accuracy(data_test, my_prediction2)
+```
+
+### Naive Model
+
+#### Train Model
+
+```{r}
+library(e1071)
+
+
+set.seed(454)
+naive_model <- naiveBayes(transportation_desert_3cat ~ 
+                             mean_income +
+                             below_poverty_perc +
+                             store_count, t, 
+                            data = nyc_clean)
+```
+
+#### Save Naive Model
+```{r}
+saveRDS(naive_model, "shiny_app_naive_model.rds")
+```
+
+#### Cross Validation
+```{r}
+naive2_prediction <- naive_classification_summary_cv(naive_model, 
+                                nyc_clean, 
+                                y="transportation_desert_3cat", k=10)$cv
+naive2_prediction %>%
+  kable(align = "c", caption = "Naive Model - Summary") %>% 
+  kable_styling()
+
+prediction3 <- as.data.frame(naive2_prediction) %>%
+  pivot_longer(
+  cols= Poor:Excellent, 
+  names_to = 'Predictions', 
+  values_to = 'Probability'
+) %>% 
+  mutate(Probability = as.numeric(str_extract(Probability,'\\d+\\.\\d+'))/100) %>%
+  mutate(transportation_desert_3cat = factor(transportation_desert_3cat, levels=c("Poor", "Typical", "Excellent"))) %>%
+  mutate(Predictions = Predictions) 
+
+prediction3 %>%  
+  ggplot(aes(x=transportation_desert_3cat, y=Probability, fill=Predictions)) + 
+  geom_bar(position="fill", stat="identity")  +
+  scale_y_continuous(labels = seq(0, 100, by = 25)) +
+  labs(title="Accessibility Predictions by Observed Category", y="Proportion", x="")+
+    theme(panel.grid.major.x = element_line("transparent"),
+         # axis.text.y.left = element_blank(),
+          axis.text.x.bottom = element_text(size = 12, face = "bold"),
+          plot.title = element_text(size = 20, hjust=.5, face = "bold", family="DIN Condensed")) +
+   scale_fill_manual(values=c("#895F32","#7D9B8A" , "#395645"),
+                       guide = guide_legend(title = "Subway Accessibility \nCategory"), na.value="#D6D6D6") 
+```
+#### Prediction
+
+```{r}
+
+pred <- posterior_predict(ordinal_model,
+                          newdata = data.frame(
+                            mean_income  = 30000, 
+                             below_poverty_perc  = 10, 
+                             store_count = 300
+                          ))
+
+df <- as.data.frame(pred) %>%
+    mutate(Classification  = case_when(
+        `1` == 1 ~ 'Poor',
+        `1` == 2 ~ 'Typical',
+        `1` == 3 ~ 'Excellent' )) %>%
+    dplyr::select(Classification)
+
+tab <- table(df) %>% sort(decreasing=TRUE) %>% prop.table()
+names(dimnames(tab)) <- c("Transit_Accessibility")
+tab
+```
+
+
+
+
+
+
